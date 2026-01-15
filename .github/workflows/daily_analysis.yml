@@ -126,7 +126,18 @@ jobs:
             echo "生成的报告:"
             ls -la reports/
           fi
-- name: 通过企业微信应用发送通知
+            - name: 显示运行结果
+        if: always()
+        run: |
+          echo "=========================================="
+          echo "分析完成"
+          echo "=========================================="
+          if [ -d "reports" ]; then
+            echo "生成的报告:"
+            ls -la reports/
+          fi
+
+      - name: 通过企业微信应用发送通知
         if: always()
         run: |
           # 1. 获取 Access Token
@@ -140,7 +151,7 @@ jobs:
           {
             "touser": "JiYinRui",
             "msgtype": "markdown",
-            "agentid": ${{ secrets.WECHAT_AGENT_ID }},
+            "agentid": "${{ secrets.WECHAT_AGENT_ID }}", # 注意：AgentId 应为字符串，这里加了引号
             "markdown": {
               "content": "## 📊 股票分析任务已完成\n**状态：** <font color=\"${{ job.status == 'success' && '#008000' || '#FF0000' }}\">${{ job.status }}</font>\n**触发模式：** `${{ github.event.inputs.mode || 'full' }}`\n**运行编号：** [${{ github.run_number }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})\n**完成时间：** $(date '+%Y-%m-%d %H:%M:%S')\n\n> 注：详细分析报告可在GitHub Actions的Artifacts中下载。"
             }
