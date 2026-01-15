@@ -115,6 +115,7 @@ jobs:
             reports/
             logs/
           retention-days: 30
+          overwrite: true  # 新增这一行，允许覆盖同名Artifact
       
       - name: 显示运行结果
         if: always()
