@@ -63,7 +63,7 @@ jobs:
           
           # 通知渠道（可同时配置多个，全部推送）
           # 方式一：企业微信
-          # WECHAT_WEBHOOK_URL: ${{ secrets.WECHAT_WEBHOOK_URL }}
+          WECHAT_WEBHOOK_URL: ${{ secrets.WECHAT_WEBHOOK_URL }}
           # 方式二：飞书
           FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
           # 方式三：Telegram（需同时配置 Bot Token 和 Chat ID）
@@ -115,7 +115,6 @@ jobs:
             reports/
             logs/
           retention-days: 30
-          overwrite: true  # 确保可以覆盖同名Artifact
       
       - name: 显示运行结果
         if: always()
@@ -127,23 +126,3 @@ jobs:
             echo "生成的报告:"
             ls -la reports/
           fi
-      
-      - name: 通过企业微信机器人发送通知
-        if: always()
-        env:
-          JOB_STATUS: ${{ job.status }}
-          MODE: ${{ github.event.inputs.mode || 'full' }}
-          RUN_NUMBER: ${{ github.run_number }}
-          RUN_ID: ${{ github.run_id }}
-          SERVER_URL: ${{ github.server_url }}
-          REPOSITORY: ${{ github.repository }}
-          WEBHOOK_URL: ${{ secrets.WECHAT_WEBHOOK }}
-        run: >
-          COLOR=$( [ "$JOB_STATUS" = "success" ] && echo "#008000" || echo "#FF0000" );
-          EMOJI=$( [ "$JOB_STATUS" = "success" ] && echo "✅" || echo "❌" );
-          curl -s -X POST "$WEBHOOK_URL" -H "Content-Type: application/json" -d "{
-            \"msgtype\": \"markdown\",
-            \"markdown\": {
-              \"content\": \"## ${EMOJI} GitHub Actions 任务完成通知\n**项目：** $REPOSITORY\n**状态：** <font color=\\\"$COLOR\\\">$JOB_STATUS</font>\n**触发模式：** \`$MODE\`\n**运行编号：** [$RUN_NUMBER]($SERVER_URL/$REPOSITORY/actions/runs/$RUN_ID)\n**完成时间：** $(date '+%Y-%m-%d %H:%M:%S')\n\n> 详细日志和分析报告可在Actions页面查看。\"
-            }
-          }"
