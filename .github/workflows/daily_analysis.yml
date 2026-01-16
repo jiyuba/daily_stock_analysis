@@ -4,7 +4,7 @@ on:
   # 定时触发 - 每天北京时间 18:00 (UTC 10:00)
   schedule:
     - cron: '0 10 * * 1-5'  # 周一到周五，UTC 10:00 = 北京时间 18:00
-  
+
   # 手动触发
   workflow_dispatch:
     inputs:
@@ -21,83 +21,77 @@ on:
 jobs:
   analyze:
     runs-on: ubuntu-latest
-    
+
     steps:
       - name: 检出代码
         uses: actions/checkout@v4
-      
+
       - name: 设置 Python 环境
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
           cache: 'pip'
-      
+
       - name: 安装依赖
         run: |
           pip install --upgrade pip
           pip install -r requirements.txt
-      
+
       - name: 创建必要目录
         run: |
           mkdir -p data logs reports
-      
+
       - name: 执行股票分析
         env:
           # Gemini AI
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GEMINI_MODEL: ${{ secrets.GEMINI_MODEL || 'gemini-3-flash-preview' }}
           GEMINI_MODEL_FALLBACK: ${{ secrets.GEMINI_MODEL_FALLBACK || 'gemini-2.5-flash' }}
-          GEMINI_REQUEST_DELAY: '3.0'  # GitHub Actions 建议增加延时
-          
+          GEMINI_REQUEST_DELAY: '3.0'
+
           # 数据源 (可选)
           TUSHARE_TOKEN: ${{ secrets.TUSHARE_TOKEN }}
-          
+
           # 搜索服务
           TAVILY_API_KEYS: ${{ secrets.TAVILY_API_KEYS }}
           SERPAPI_API_KEYS: ${{ secrets.SERPAPI_API_KEYS }}
-          
+
           # OpenAI 兼容 API（备选）
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
           OPENAI_MODEL: ${{ secrets.OPENAI_MODEL }}
-          
-          # 通知渠道（可同时配置多个，全部推送）
-          # 方式一：企业微信
-          WECHAT_WEBHOOK_URL: ${{ secrets.WECHAT_WEBHOOK_URL }}
-          # 方式二：飞书
+
+          # 通知渠道（可同时配置多个）
+          # 企业微信（兼容两种 secret 名）
+          WECHAT_WEBHOOK_URL: ${{ secrets.WECHAT_WEBHOOK_URL || secrets.WECHAT_WEBHOOK }}
+
           FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
-          # 方式三：Telegram（需同时配置 Bot Token 和 Chat ID）
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          # 方式四：邮件（只需邮箱和授权码，SMTP自动识别）
           EMAIL_SENDER: ${{ secrets.EMAIL_SENDER }}
           EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
           EMAIL_RECEIVERS: ${{ secrets.EMAIL_RECEIVERS }}
-          # 方式五：自定义 Webhook（支持钉钉、Discord、Slack、Bark等，多个用逗号分隔）
           CUSTOM_WEBHOOK_URLS: ${{ secrets.CUSTOM_WEBHOOK_URLS }}
-          # 方式六：飞书文档
           FEISHU_APP_ID: ${{ secrets.FEISHU_APP_ID }}
           FEISHU_APP_SECRET: ${{ secrets.FEISHU_APP_SECRET }}
           FEISHU_FOLDER_TOKEN: ${{ secrets.FEISHU_FOLDER_TOKEN }}
 
-          
           # 自选股列表 (从 secrets 或使用默认值)
           STOCK_LIST: ${{ secrets.STOCK_LIST || '600519' }}
-          
+
           # 其他配置
           LOG_LEVEL: INFO
           DATA_DAYS: 60
           MAX_CONCURRENT: 3
         run: |
-          # 判断运行模式
           MODE="${{ github.event.inputs.mode || 'full' }}"
-          
+
           echo "=========================================="
           echo "运行模式: $MODE"
           echo "自选股: $STOCK_LIST"
           echo "时间: $(TZ='Asia/Shanghai' date '+%Y-%m-%d %H:%M:%S')"
           echo "=========================================="
-          
+
           if [ "$MODE" = "market-only" ]; then
             python main.py --market-review
           elif [ "$MODE" = "stocks-only" ]; then
@@ -105,7 +99,7 @@ jobs:
           else
             python main.py
           fi
-      
+
       - name: 上传分析报告
         uses: actions/upload-artifact@v4
         if: always()
@@ -115,7 +109,7 @@ jobs:
             reports/
             logs/
           retention-days: 30
-      
+
       - name: 显示运行结果
         if: always()
         run: |
@@ -127,159 +121,163 @@ jobs:
             ls -la reports/
           fi
 
-       - name: 企业微信推送报告（正文分段 + 直接发送md附件）
-       if: always()
-  continue-on-error: true
-  env:
-    JOB_STATUS: ${{ job.status }}
-    MODE: ${{ github.event.inputs.mode || 'full' }}
-    RUN_NUMBER: ${{ github.run_number }}
-    RUN_ID: ${{ github.run_id }}
-    SERVER_URL: ${{ github.server_url }}
-    REPOSITORY: ${{ github.repository }}
-    WECHAT_WEBHOOK_URL: ${{ secrets.WECHAT_WEBHOOK_URL || secrets.WECHAT_WEBHOOK }}
-  run: |
-    python - <<'PY'
-    import os, re, glob, time, sys, subprocess
-    from datetime import datetime, timezone, timedelta
+      - name: 企业微信推送报告（正文分段 + 发送当天两份md附件）
+        if: always()
+        continue-on-error: true
+        env:
+          JOB_STATUS: ${{ job.status }}
+          MODE: ${{ github.event.inputs.mode || 'full' }}
+          RUN_NUMBER: ${{ github.run_number }}
+          RUN_ID: ${{ github.run_id }}
+          SERVER_URL: ${{ github.server_url }}
+          REPOSITORY: ${{ github.repository }}
+          WECHAT_WEBHOOK_URL: ${{ secrets.WECHAT_WEBHOOK_URL || secrets.WECHAT_WEBHOOK }}
+        run: |
+          python - <<'PY'
+          import os, re, glob, time, sys, subprocess
+          from datetime import datetime, timezone, timedelta
 
-    # ---- requests 兜底安装 ----
-    try:
-      import requests
-    except Exception:
-      subprocess.check_call([sys.executable, "-m", "pip", "install", "requests"])
-      import requests
+          # ---- requests 兜底安装 ----
+          try:
+            import requests
+          except Exception:
+            subprocess.check_call([sys.executable, "-m", "pip", "install", "requests"])
+            import requests
 
-    webhook_url = (os.environ.get("WECHAT_WEBHOOK_URL") or "").strip()
-    if not webhook_url:
-      print("WECHAT_WEBHOOK_URL not set, skip wecom notify.")
-      raise SystemExit(0)
+          webhook_url = (os.environ.get("WECHAT_WEBHOOK_URL") or "").strip()
+          if not webhook_url:
+            print("WECHAT_WEBHOOK_URL not set, skip wecom notify.")
+            raise SystemExit(0)
 
-    # 既支持完整URL，也支持只填 key
-    m = re.search(r"key=([^&]+)", webhook_url)
-    key = m.group(1) if m else webhook_url
+          # 既支持完整URL，也支持只填 key
+          m = re.search(r"key=([^&]+)", webhook_url)
+          key = m.group(1) if m else webhook_url
 
-    send_url = f"https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key={key}"
-    upload_url = f"https://qyapi.weixin.qq.com/cgi-bin/webhook/upload_media?key={key}&type=file"
+          send_url = f"https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key={key}"
+          upload_url = f"https://qyapi.weixin.qq.com/cgi-bin/webhook/upload_media?key={key}&type=file"
 
-    job_status = os.environ.get("JOB_STATUS", "unknown")
-    mode = os.environ.get("MODE", "full")
-    run_number = os.environ.get("RUN_NUMBER", "")
-    run_id = os.environ.get("RUN_ID", "")
-    server_url = os.environ.get("SERVER_URL", "")
-    repo = os.environ.get("REPOSITORY", "")
+          job_status = os.environ.get("JOB_STATUS", "unknown")
+          mode = os.environ.get("MODE", "full")
+          run_number = os.environ.get("RUN_NUMBER", "")
+          run_id = os.environ.get("RUN_ID", "")
+          server_url = os.environ.get("SERVER_URL", "")
+          repo = os.environ.get("REPOSITORY", "")
 
-    bj_time = datetime.now(timezone.utc).astimezone(timezone(timedelta(hours=8))).strftime("%Y-%m-%d %H:%M:%S")
-    emoji = "✅" if job_status == "success" else "❌"
-    color = "info" if job_status == "success" else "warning"
-    run_link = f"{server_url}/{repo}/actions/runs/{run_id}" if (server_url and repo and run_id) else ""
+          bj_tz = timezone(timedelta(hours=8))
+          bj_now = datetime.now(timezone.utc).astimezone(bj_tz)
+          bj_time = bj_now.strftime("%Y-%m-%d %H:%M:%S")
+          today = bj_now.strftime("%Y%m%d")
 
-    def post_json(url, payload, retry=3):
-      last = None
-      for i in range(retry):
-        try:
-          r = requests.post(url, json=payload, timeout=30)
-          r.raise_for_status()
-          data = r.json()
-          if data.get("errcode") == 0:
-            return True, data
-          last = data
-        except Exception as e:
-          last = {"exception": str(e)}
-        time.sleep(2.0 * (i + 1))
-      return False, last
+          emoji = "✅" if job_status == "success" else "❌"
+          color = "info" if job_status == "success" else "warning"
+          run_link = f"{server_url}/{repo}/actions/runs/{run_id}" if (server_url and repo and run_id) else ""
 
-    def send_markdown(md: str):
-      ok, resp = post_json(send_url, {"msgtype":"markdown", "markdown":{"content": md}})
-      if not ok:
-        print("send_markdown failed:", resp)
-      return ok
+          def post_json(url, payload, retry=3):
+            last = None
+            for i in range(retry):
+              try:
+                r = requests.post(url, json=payload, timeout=30)
+                r.raise_for_status()
+                data = r.json()
+                if data.get("errcode") == 0:
+                  return True, data
+                last = data
+              except Exception as e:
+                last = {"exception": str(e)}
+              time.sleep(2.0 * (i + 1))
+            return False, last
 
-    def chunk_utf8(text: str, max_bytes: int):
-      out, buf, n = [], [], 0
-      for ch in text:
-        b = ch.encode("utf-8", errors="ignore")
-        if buf and (n + len(b) > max_bytes):
-          out.append("".join(buf))
-          buf, n = [ch], len(b)
-        else:
-          buf.append(ch); n += len(b)
-      if buf: out.append("".join(buf))
-      return out
+          def send_markdown(md: str):
+            ok, resp = post_json(send_url, {"msgtype":"markdown", "markdown":{"content": md}})
+            if not ok:
+              print("send_markdown failed:", resp)
+            return ok
 
-    # 1) 先发头部摘要
-    header = (
-      f"## {emoji} 每日股票分析报告\n"
-      f"> **项目：** {repo}\n"
-      f"> **状态：** <font color=\"{color}\">{job_status}</font>\n"
-      f"> **模式：** `{mode}`\n"
-      f"> **时间：** {bj_time}\n"
-    )
-    if run_link:
-      header += f"> **运行：** [{run_number}]({run_link})\n"
-    send_markdown(header)
-    time.sleep(3.2)  # 频控
+          def chunk_utf8(text: str, max_bytes: int):
+            out, buf, n = [], [], 0
+            for ch in text:
+              b = ch.encode("utf-8", errors="ignore")
+              if buf and (n + len(b) > max_bytes):
+                out.append("".join(buf))
+                buf, n = [ch], len(b)
+              else:
+                buf.append(ch); n += len(b)
+            if buf:
+              out.append("".join(buf))
+            return out
 
-    # 2) 找最新两个 md
-    md_files = sorted(glob.glob("reports/*.md"), key=os.path.getmtime, reverse=True)
-    md_files = [p for p in md_files if os.path.isfile(p)]
+          def send_one_report(path: str):
+            name = os.path.basename(path)
 
-    if not md_files:
-      send_markdown("> 未找到 `reports/*.md` 报告文件。")
-      raise SystemExit(0)
+            # 正文分段发送
+            with open(path, "r", encoding="utf-8", errors="replace") as f:
+              content = f.read().strip()
 
-    # 只取最新两个
-    md_files = md_files[:2]
+            send_markdown(f"## 📄 报告：`{name}`")
+            time.sleep(3.2)
 
-    def send_one_report(report_path: str, idx: int, total_reports: int):
-      name = os.path.basename(report_path)
+            if not content:
+              send_markdown(f"> 找到报告 `{name}`，但内容为空。")
+              time.sleep(3.2)
+            else:
+              MAX_MD_BYTES = 2600
+              chunks = chunk_utf8(content, MAX_MD_BYTES)
+              total = len(chunks)
+              for i, part in enumerate(chunks, 1):
+                send_markdown(f"### {name}（正文 {i}/{total}）\n{part}")
+                time.sleep(3.2)
 
-      # 2.1) 提示当前发送的报告文件名
-      send_markdown(f"## 📄 报告文件（{idx}/{total_reports}）：`{name}`")
-      time.sleep(3.2)
+            # 上传并发送 md 附件（不压缩）
+            with open(path, "rb") as f:
+              r = requests.post(upload_url, files={"media": (name, f)}, timeout=60)
+              r.raise_for_status()
+              data = r.json()
 
-      # 3) 正文分段发送（群内直接可读）
-      with open(report_path, "r", encoding="utf-8", errors="replace") as f:
-        content = f.read().strip()
+            if data.get("errcode") == 0 and data.get("media_id"):
+              media_id = data["media_id"]
+              ok, resp = post_json(send_url, {"msgtype":"file", "file":{"media_id": media_id}})
+              if not ok:
+                print(f"send file failed ({name}):", resp)
+              else:
+                send_markdown(f"> ✅ 已发送附件：`{name}`（未压缩）。")
+                time.sleep(3.2)
+            else:
+              print(f"upload_media failed ({name}):", data)
 
-      if not content:
-        send_markdown(f"> 找到报告 `{name}`，但内容为空。")
-        time.sleep(3.2)
-      else:
-        MAX_MD_BYTES = 2800  # 给标题/序号留余量，避免超限
-        chunks = chunk_utf8(content, MAX_MD_BYTES)
-        total_chunks = len(chunks)
-        for i, part in enumerate(chunks, 1):
-          send_markdown(f"### {name}（正文 {i}/{total_chunks}）\n{part}")
+          # 头部摘要
+          header = (
+            f"## {emoji} 每日股票分析报告\n"
+            f"> **项目：** {repo}\n"
+            f"> **状态：** <font color=\"{color}\">{job_status}</font>\n"
+            f"> **模式：** `{mode}`\n"
+            f"> **时间：** {bj_time}\n"
+          )
+          if run_link:
+            header += f"> **运行：** [{run_number}]({run_link})\n"
+          send_markdown(header)
           time.sleep(3.2)
 
-      # 4) 直接上传并发送 md 文件（不打包）
-      with open(report_path, "rb") as f:
-        r = requests.post(upload_url, files={"media": (name, f)}, timeout=60)
-        r.raise_for_status()
-        data = r.json()
+          # 只找当天两份报告（严格按日期）
+          targets = [
+            f"reports/report_{today}.md",
+            f"reports/market_review_{today}.md",
+          ]
 
-      if data.get("errcode") == 0 and data.get("media_id"):
-        media_id = data["media_id"]
-        ok, resp = post_json(send_url, {"msgtype":"file", "file":{"media_id": media_id}})
-        if not ok:
-          print(f"send file failed ({name}):", resp)
-        else:
-          send_markdown(f"> 已发送附件：`{name}`（未压缩）。")
-          time.sleep(3.2)
-      else:
-        print(f"upload_media failed ({name}):", data)
+          existing = [p for p in targets if os.path.isfile(p)]
+          missing = [p for p in targets if not os.path.isfile(p)]
 
-    # 5) 依次发送最新两个文件（按时间从旧到新发）
-    latest_two = list(reversed(md_files))
-    for idx, p in enumerate(latest_two, 1):
-      send_one_report(p, idx, len(latest_two))
+          if not existing:
+            send_markdown(
+              f"> 未找到当天报告文件（{today}）：\n" +
+              "\n".join([f"- `{os.path.basename(p)}`" for p in targets])
+            )
+            raise SystemExit(0)
 
-    PY
+          if missing:
+            send_markdown("> ⚠️ 以下报告未找到：\n" + "\n".join([f"- `{os.path.basename(p)}`" for p in missing]))
+            time.sleep(3.2)
 
+          for p in existing:
+            send_one_report(p)
 
-     
-
-      
-
-     
+          PY
