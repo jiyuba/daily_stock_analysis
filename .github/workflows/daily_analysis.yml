@@ -127,139 +127,158 @@ jobs:
             ls -la reports/
           fi
 
-      - name: 企业微信推送报告（正文分段 + 直接发送md附件）
-        if: always()
-        continue-on-error: true
-        env:
-          JOB_STATUS: ${{ job.status }}
-          MODE: ${{ github.event.inputs.mode || 'full' }}
-          RUN_NUMBER: ${{ github.run_number }}
-          RUN_ID: ${{ github.run_id }}
-          SERVER_URL: ${{ github.server_url }}
-          REPOSITORY: ${{ github.repository }}
-          WECHAT_WEBHOOK_URL: ${{ secrets.WECHAT_WEBHOOK_URL || secrets.WECHAT_WEBHOOK }}
-        run: |
-          python - <<'PY'
-          import os, re, glob, time, sys, subprocess
-          from datetime import datetime, timezone, timedelta
+       - name: 企业微信推送报告（正文分段 + 直接发送md附件）
+       if: always()
+  continue-on-error: true
+  env:
+    JOB_STATUS: ${{ job.status }}
+    MODE: ${{ github.event.inputs.mode || 'full' }}
+    RUN_NUMBER: ${{ github.run_number }}
+    RUN_ID: ${{ github.run_id }}
+    SERVER_URL: ${{ github.server_url }}
+    REPOSITORY: ${{ github.repository }}
+    WECHAT_WEBHOOK_URL: ${{ secrets.WECHAT_WEBHOOK_URL || secrets.WECHAT_WEBHOOK }}
+  run: |
+    python - <<'PY'
+    import os, re, glob, time, sys, subprocess
+    from datetime import datetime, timezone, timedelta
 
-          # ---- requests 兜底安装 ----
-          try:
-            import requests
-          except Exception:
-            subprocess.check_call([sys.executable, "-m", "pip", "install", "requests"])
-            import requests
+    # ---- requests 兜底安装 ----
+    try:
+      import requests
+    except Exception:
+      subprocess.check_call([sys.executable, "-m", "pip", "install", "requests"])
+      import requests
 
-          webhook_url = (os.environ.get("WECHAT_WEBHOOK_URL") or "").strip()
-          if not webhook_url:
-            print("WECHAT_WEBHOOK_URL not set, skip wecom notify.")
-            raise SystemExit(0)
+    webhook_url = (os.environ.get("WECHAT_WEBHOOK_URL") or "").strip()
+    if not webhook_url:
+      print("WECHAT_WEBHOOK_URL not set, skip wecom notify.")
+      raise SystemExit(0)
 
-          # 既支持完整URL，也支持只填 key
-          m = re.search(r"key=([^&]+)", webhook_url)
-          key = m.group(1) if m else webhook_url
+    # 既支持完整URL，也支持只填 key
+    m = re.search(r"key=([^&]+)", webhook_url)
+    key = m.group(1) if m else webhook_url
 
-          send_url = f"https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key={key}"
-          upload_url = f"https://qyapi.weixin.qq.com/cgi-bin/webhook/upload_media?key={key}&type=file"
+    send_url = f"https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key={key}"
+    upload_url = f"https://qyapi.weixin.qq.com/cgi-bin/webhook/upload_media?key={key}&type=file"
 
-          job_status = os.environ.get("JOB_STATUS", "unknown")
-          mode = os.environ.get("MODE", "full")
-          run_number = os.environ.get("RUN_NUMBER", "")
-          run_id = os.environ.get("RUN_ID", "")
-          server_url = os.environ.get("SERVER_URL", "")
-          repo = os.environ.get("REPOSITORY", "")
+    job_status = os.environ.get("JOB_STATUS", "unknown")
+    mode = os.environ.get("MODE", "full")
+    run_number = os.environ.get("RUN_NUMBER", "")
+    run_id = os.environ.get("RUN_ID", "")
+    server_url = os.environ.get("SERVER_URL", "")
+    repo = os.environ.get("REPOSITORY", "")
 
-          bj_time = datetime.now(timezone.utc).astimezone(timezone(timedelta(hours=8))).strftime("%Y-%m-%d %H:%M:%S")
-          emoji = "✅" if job_status == "success" else "❌"
-          color = "info" if job_status == "success" else "warning"
-          run_link = f"{server_url}/{repo}/actions/runs/{run_id}" if (server_url and repo and run_id) else ""
+    bj_time = datetime.now(timezone.utc).astimezone(timezone(timedelta(hours=8))).strftime("%Y-%m-%d %H:%M:%S")
+    emoji = "✅" if job_status == "success" else "❌"
+    color = "info" if job_status == "success" else "warning"
+    run_link = f"{server_url}/{repo}/actions/runs/{run_id}" if (server_url and repo and run_id) else ""
 
-          def post_json(url, payload, retry=3):
-            last = None
-            for i in range(retry):
-              try:
-                r = requests.post(url, json=payload, timeout=30)
-                r.raise_for_status()
-                data = r.json()
-                if data.get("errcode") == 0:
-                  return True, data
-                last = data
-              except Exception as e:
-                last = {"exception": str(e)}
-              time.sleep(2.0 * (i + 1))
-            return False, last
+    def post_json(url, payload, retry=3):
+      last = None
+      for i in range(retry):
+        try:
+          r = requests.post(url, json=payload, timeout=30)
+          r.raise_for_status()
+          data = r.json()
+          if data.get("errcode") == 0:
+            return True, data
+          last = data
+        except Exception as e:
+          last = {"exception": str(e)}
+        time.sleep(2.0 * (i + 1))
+      return False, last
 
-          def send_markdown(md: str):
-            ok, resp = post_json(send_url, {"msgtype":"markdown", "markdown":{"content": md}})
-            if not ok:
-              print("send_markdown failed:", resp)
-            return ok
+    def send_markdown(md: str):
+      ok, resp = post_json(send_url, {"msgtype":"markdown", "markdown":{"content": md}})
+      if not ok:
+        print("send_markdown failed:", resp)
+      return ok
 
-          def chunk_utf8(text: str, max_bytes: int):
-            out, buf, n = [], [], 0
-            for ch in text:
-              b = ch.encode("utf-8", errors="ignore")
-              if buf and (n + len(b) > max_bytes):
-                out.append("".join(buf))
-                buf, n = [ch], len(b)
-              else:
-                buf.append(ch); n += len(b)
-            if buf: out.append("".join(buf))
-            return out
+    def chunk_utf8(text: str, max_bytes: int):
+      out, buf, n = [], [], 0
+      for ch in text:
+        b = ch.encode("utf-8", errors="ignore")
+        if buf and (n + len(b) > max_bytes):
+          out.append("".join(buf))
+          buf, n = [ch], len(b)
+        else:
+          buf.append(ch); n += len(b)
+      if buf: out.append("".join(buf))
+      return out
 
-          # 1) 先发头部摘要
-          header = (
-            f"## {emoji} 每日股票分析报告\n"
-            f"> **项目：** {repo}\n"
-            f"> **状态：** <font color=\"{color}\">{job_status}</font>\n"
-            f"> **模式：** `{mode}`\n"
-            f"> **时间：** {bj_time}\n"
-          )
-          if run_link:
-            header += f"> **运行：** [{run_number}]({run_link})\n"
-          send_markdown(header)
-          time.sleep(3.2)  # 频控
+    # 1) 先发头部摘要
+    header = (
+      f"## {emoji} 每日股票分析报告\n"
+      f"> **项目：** {repo}\n"
+      f"> **状态：** <font color=\"{color}\">{job_status}</font>\n"
+      f"> **模式：** `{mode}`\n"
+      f"> **时间：** {bj_time}\n"
+    )
+    if run_link:
+      header += f"> **运行：** [{run_number}]({run_link})\n"
+    send_markdown(header)
+    time.sleep(3.2)  # 频控
 
-          # 2) 找最新 md
-          md_files = sorted(glob.glob("reports/*.md"), key=os.path.getmtime, reverse=True)
-          report_path = md_files[0] if md_files else None
+    # 2) 找最新两个 md
+    md_files = sorted(glob.glob("reports/*.md"), key=os.path.getmtime, reverse=True)
+    md_files = [p for p in md_files if os.path.isfile(p)]
 
-          if not report_path or not os.path.isfile(report_path):
-            send_markdown("> 未找到 `reports/*.md` 报告文件。")
-            raise SystemExit(0)
+    if not md_files:
+      send_markdown("> 未找到 `reports/*.md` 报告文件。")
+      raise SystemExit(0)
 
-          # 3) 正文分段发送（群内直接可读）
-          with open(report_path, "r", encoding="utf-8", errors="replace") as f:
-            content = f.read().strip()
+    # 只取最新两个
+    md_files = md_files[:2]
 
-          if not content:
-            send_markdown(f"> 找到报告 `{os.path.basename(report_path)}`，但内容为空。")
-          else:
-            MAX_MD_BYTES = 2800  # 给标题/序号留余量，避免超限
-            chunks = chunk_utf8(content, MAX_MD_BYTES)
-            total = len(chunks)
-            for i, part in enumerate(chunks, 1):
-              # 注意：这里 part 已经是 md 格式，直接发即可
-              send_markdown(f"### 报告正文（{i}/{total}）\n{part}")
-              time.sleep(3.2)
+    def send_one_report(report_path: str, idx: int, total_reports: int):
+      name = os.path.basename(report_path)
 
-          # 4) 直接上传并发送 md 文件（不打包）
-          with open(report_path, "rb") as f:
-            r = requests.post(upload_url, files={"media": (os.path.basename(report_path), f)}, timeout=60)
-            r.raise_for_status()
-            data = r.json()
+      # 2.1) 提示当前发送的报告文件名
+      send_markdown(f"## 📄 报告文件（{idx}/{total_reports}）：`{name}`")
+      time.sleep(3.2)
 
-          if data.get("errcode") == 0 and data.get("media_id"):
-            media_id = data["media_id"]
-            ok, resp = post_json(send_url, {"msgtype":"file", "file":{"media_id": media_id}})
-            if not ok:
-              print("send file failed:", resp)
-            else:
-              send_markdown(f"> 已发送附件：`{os.path.basename(report_path)}`（未压缩）。")
-          else:
-            print("upload_media failed:", data)
+      # 3) 正文分段发送（群内直接可读）
+      with open(report_path, "r", encoding="utf-8", errors="replace") as f:
+        content = f.read().strip()
 
-          PY
+      if not content:
+        send_markdown(f"> 找到报告 `{name}`，但内容为空。")
+        time.sleep(3.2)
+      else:
+        MAX_MD_BYTES = 2800  # 给标题/序号留余量，避免超限
+        chunks = chunk_utf8(content, MAX_MD_BYTES)
+        total_chunks = len(chunks)
+        for i, part in enumerate(chunks, 1):
+          send_markdown(f"### {name}（正文 {i}/{total_chunks}）\n{part}")
+          time.sleep(3.2)
+
+      # 4) 直接上传并发送 md 文件（不打包）
+      with open(report_path, "rb") as f:
+        r = requests.post(upload_url, files={"media": (name, f)}, timeout=60)
+        r.raise_for_status()
+        data = r.json()
+
+      if data.get("errcode") == 0 and data.get("media_id"):
+        media_id = data["media_id"]
+        ok, resp = post_json(send_url, {"msgtype":"file", "file":{"media_id": media_id}})
+        if not ok:
+          print(f"send file failed ({name}):", resp)
+        else:
+          send_markdown(f"> 已发送附件：`{name}`（未压缩）。")
+          time.sleep(3.2)
+      else:
+        print(f"upload_media failed ({name}):", data)
+
+    # 5) 依次发送最新两个文件（按时间从旧到新发）
+    latest_two = list(reversed(md_files))
+    for idx, p in enumerate(latest_two, 1):
+      send_one_report(p, idx, len(latest_two))
+
+    PY
+
+
+     
 
       
 
