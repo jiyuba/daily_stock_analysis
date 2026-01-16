@@ -128,7 +128,7 @@ jobs:
             ls -la reports/
           fi
       
-      - name: 通过企业微信应用发送通知
+      - name: 通过企业微信机器人发送通知
         if: always()
         env:
           JOB_STATUS: ${{ job.status }}
@@ -137,40 +137,13 @@ jobs:
           RUN_ID: ${{ github.run_id }}
           SERVER_URL: ${{ github.server_url }}
           REPOSITORY: ${{ github.repository }}
-          AGENT_ID: ${{ secrets.WECHAT_AGENT_ID }}
-          CORP_ID: ${{ secrets.WECHAT_CORP_ID }}
-          AGENT_SECRET: ${{ secrets.WECHAT_AGENT_SECRET }}
-        run: |
-          echo "正在获取企业微信 Access Token..."
-          RESPONSE=$(curl -s -G "https://qyapi.weixin.qq.com/cgi-bin/gettoken" --data-urlencode "corpid=$CORP_ID" --data-urlencode "corpsecret=$AGENT_SECRET")
-          if [ $? -ne 0 ]; then echo "❌ 请求Token API失败"; exit 1; fi
-          echo "API原始响应: $RESPONSE"
-          TOKEN=$(echo "$RESPONSE" | python3 -c "import sys, json; d=json.load(sys.stdin); exit(1) if d.get('errcode', 0)!=0 else None; print(d.get('access_token', ''))")
-          if [ $? -ne 0 ] || [ -z "$TOKEN" ]; then
-            ERR_MSG=$(echo "$RESPONSE" | python3 -c "import sys, json; d=json.load(sys.stdin); print(d.get('errmsg', 'Unknown error'))")
-            echo "❌ 获取Token失败: $ERR_MSG (请检查 CorpID 和 Secret)"
-            exit 1
-          fi
-          echo "✅ Token 获取成功"
-          
-          # 构建消息内容
-          if [ "$JOB_STATUS" = "success" ]; then COLOR="#008000"; else COLOR="#FF0000"; fi
-          CURRENT_TIME=$(date '+%Y-%m-%d %H:%M:%S')
-          CONTENT="## 📊 股票分析任务已完成\n**状态：** <font color=\"$COLOR\">$JOB_STATUS</font>\n**触发模式：** \`$MODE\`\n**运行编号：** [$RUN_NUMBER]($SERVER_URL/$REPOSITORY/actions/runs/$RUN_ID)\n**完成时间：** $CURRENT_TIME\n\n> 注：详细分析报告可在GitHub Actions的Artifacts中下载。"
-          
-          # 使用 Python 构建 JSON
-          MESSAGE_DATA=$(python3 -c "import json; print(json.dumps({'touser': 'JiYinRui', 'msgtype': 'markdown', 'agentid': '$AGENT_ID', 'markdown': {'content': '''$CONTENT'''}}))")
-          
-          echo "正在发送消息..."
-          SEND_RESPONSE=$(curl -s -X POST "https://qyapi.weixin.qq.com/cgi-bin/message/send?access_token=$TOKEN" -H "Content-Type: application/json" -d "$MESSAGE_DATA")
-          
-          echo "发送API响应: $SEND_RESPONSE"
-          SEND_ERRCODE=$(echo "$SEND_RESPONSE" | python3 -c "import sys, json; print(json.load(sys.stdin).get('errcode', '-1'))")
-          if [ "$SEND_ERRCODE" != "0" ]; then
-            SEND_ERRMSG=$(echo "$SEND_RESPONSE" | python3 -c "import sys, json; print(json.load(sys.stdin).get('errmsg', 'Unknown error'))")
-            echo "❌ 消息发送失败 (错误码: $SEND_ERRCODE): $SEND_ERRMSG"
-            echo "请检查: 1. AgentId是否正确; 2. 应用是否已启用; 3. 收件人'JiYinRui'是否在应用可见范围内"
-            exit 1
-          else
-            echo "✅ 企业微信消息发送成功！"
-          fi
+          WEBHOOK_URL: ${{ secrets.WECHAT_WEBHOOK }}
+        run: >
+          COLOR=$( [ "$JOB_STATUS" = "success" ] && echo "#008000" || echo "#FF0000" );
+          EMOJI=$( [ "$JOB_STATUS" = "success" ] && echo "✅" || echo "❌" );
+          curl -s -X POST "$WEBHOOK_URL" -H "Content-Type: application/json" -d "{
+            \"msgtype\": \"markdown\",
+            \"markdown\": {
+              \"content\": \"## ${EMOJI} GitHub Actions 任务完成通知\n**项目：** $REPOSITORY\n**状态：** <font color=\\\"$COLOR\\\">$JOB_STATUS</font>\n**触发模式：** \`$MODE\`\n**运行编号：** [$RUN_NUMBER]($SERVER_URL/$REPOSITORY/actions/runs/$RUN_ID)\n**完成时间：** $(date '+%Y-%m-%d %H:%M:%S')\n\n> 详细日志和分析报告可在Actions页面查看。\"
+            }
+          }"
