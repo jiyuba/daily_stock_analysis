@@ -126,3 +126,163 @@ jobs:
             echo "生成的报告:"
             ls -la reports/
           fi
+          
+      - name: 通过企业微信机器人发送通知
+        if: always()
+        env:
+          JOB_STATUS: ${{ job.status }}
+          MODE: ${{ github.event.inputs.mode || 'full' }}
+          WEBHOOK_URL: ${{ secrets.WECHAT_WEBHOOK_URL }}
+        run: |
+          echo "正在准备发送企业微信通知..."
+
+          # 1. 基础信息设置
+          if [ "$JOB_STATUS" = "success" ]; then
+            COLOR="#008000"
+            EMOJI="✅"
+          else
+            COLOR="#FF0000"
+            EMOJI="❌"
+          fi
+          CURRENT_TIME=$(date '+%Y-%m-%d %H:%M:%S')
+          export COLOR EMOJI JOB_STATUS MODE CURRENT_TIME
+
+          # 2. 使用Python完成：查找报告、智能拆分并发送
+          python3 << 'EOF'
+import os, json, urllib.request, glob, time
+
+webhook_url = os.environ.get('WEBHOOK_URL')
+if not webhook_url:
+    print("❌ 错误: WEBHOOK_URL 环境变量未设置")
+    exit(1)
+
+color = os.environ.get('COLOR')
+emoji = os.environ.get('EMOJI')
+job_status = os.environ.get('JOB_STATUS')
+mode = os.environ.get('MODE')
+current_time = os.environ.get('CURRENT_TIME')
+
+def send_wechat_message(webhook, content):
+    """发送消息到企业微信机器人的通用函数"""
+    data = {
+        "msgtype": "markdown",
+        "markdown": {
+            "content": content
+        }
+    }
+    try:
+        req = urllib.request.Request(
+            webhook,
+            data=json.dumps(data, ensure_ascii=False).encode('utf-8'),
+            headers={'Content-Type': 'application/json'}
+        )
+        with urllib.request.urlopen(req) as response:
+            result = json.loads(response.read().decode('utf-8'))
+            if result.get('errcode') == 0:
+                return True
+            else:
+                print(f"❌ 消息发送失败: {result.get('errmsg')}")
+                return False
+    except Exception as e:
+        print(f"❌ 请求发送失败: {e}")
+        return False
+
+# ========== 1. 查找报告文件 ==========
+report_files = sorted(glob.glob('reports/report_*.md'))
+if not report_files:
+    print("未找到报告文件，发送状态通知。")
+    status_content = f'''## {emoji} 股票分析任务完成
+**运行状态:** <font color="{color}">{job_status}</font>
+**分析模式:** {mode}
+**完成时间:** {current_time}
+> 未找到详细分析报告文件。'''
+    if send_wechat_message(webhook_url, status_content):
+        print("✅ 状态通知发送成功。")
+    exit(0)
+
+report_path = report_files[-1]
+print(f"找到报告文件: {report_path}，准备发送全文...")
+
+# ========== 2. 读取报告并准备拆分 ==========
+with open(report_path, 'r', encoding='utf-8') as f:
+    full_content = f.read()
+
+total_len = len(full_content)
+print(f"报告总长度: {total_len} 字符")
+
+# 企业微信单条消息限制约4000字符，设置安全阈值
+MAX_MSG_LEN = 3800
+
+# ========== 3. 智能拆分逻辑 ==========
+def split_content(content, max_len):
+    """将内容智能拆分为多个块"""
+    # 优先按段落拆分
+    paragraphs = content.split('\n\n')
+    chunks = []
+    current_chunk = ""
+
+    for para in paragraphs:
+        # 如果段落本身超长，按固定长度硬拆分
+        if len(para) > max_len:
+            if current_chunk:
+                chunks.append(current_chunk.strip())
+                current_chunk = ""
+            # 将超长段落拆分为多个块
+            for i in range(0, len(para), max_len):
+                chunks.append(para[i:i+max_len])
+        elif len(current_chunk) + len(para) + 2 <= max_len:
+            current_chunk += para + '\n\n'
+        else:
+            chunks.append(current_chunk.strip())
+            current_chunk = para + '\n\n'
+
+    if current_chunk:
+        chunks.append(current_chunk.strip())
+
+    return chunks
+
+# ========== 4. 发送消息 ==========
+if total_len <= MAX_MSG_LEN:
+    print("报告较短，直接发送单条消息。")
+    message_content = f'''## {emoji} 股票分析报告（全文）
+**运行状态:** <font color="{color}">{job_status}</font>
+**模式:** {mode} | **时间:** {current_time}
+---
+{full_content}'''
+
+    if send_wechat_message(webhook_url, message_content):
+        print("✅ 报告全文发送成功！")
+else:
+    print("报告较长，将拆分为多条消息发送。")
+    chunks = split_content(full_content, MAX_MSG_LEN)
+    total_chunks = len(chunks)
+    print(f"报告将拆分为 {total_chunks} 条消息发送。")
+
+    # 4.1 发送总览消息
+    overview_content = f'''## {emoji} 股票分析报告（全文，共{total_chunks}部分）
+**运行状态:** <font color="{color}">{job_status}</font>
+**分析模式:** {mode}
+**完成时间:** {current_time}
+**报告长度:** {total_len} 字符
+---
+报告较长，将分多条消息发送，请稍候...'''
+
+    if send_wechat_message(webhook_url, overview_content):
+        print("✅ 已发送总览消息。")
+
+    # 4.2 发送各个报告部分
+    for idx, chunk in enumerate(chunks, 1):
+        chunk_content = f'''### 报告部分 ({idx}/{total_chunks})
+{chunk}
+---
+[{idx}/{total_chunks}]'''
+
+        if send_wechat_message(webhook_url, chunk_content):
+            print(f"✅ 已发送报告部分 {idx}/{total_chunks} (长度: {len(chunk)} 字符)")
+
+        # 短暂延时，避免发送过快
+        if idx < total_chunks:
+            time.sleep(0.5)
+
+    print(f"✅ 报告全文发送完成，共 {total_chunks} 条消息。")
+EOF
